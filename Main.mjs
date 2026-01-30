@@ -72,6 +72,20 @@ class Grut{
         }
     }
 
+    async log(){
+        let currentCommitHash = await this.getCurrentHead();
+        while(currentCommitHash){
+            const commitPath = path.join(this.objectsPath, currentCommitHash);
+            const commitData = JSON.parse(await fs.readFile(commitPath, { encoding: 'utf-8' }));
+            console.log(`Commit: ${currentCommitHash}`);
+            console.log(`Date: ${commitData.timeStamp}`);
+            console.log(`Message: ${commitData.message}`);
+            console.log('-------------------------');
+            currentCommitHash = commitData.parent;
+        }
+
+    }
+
 }
 
 (async () => {
