@@ -1,166 +1,233 @@
-#! /usr/bin/env node            // Shabang to run the script with Node.js
+#!/usr/bin/env node
 
 import path from 'path';
 import fs from 'fs/promises';
 import crypto from 'crypto';
 import { diffLines } from 'diff';
 import chalk from 'chalk';
-// import { Command } from 'commander';
+import { Command } from 'commander';
 
-class Grut{
- 
-    constructor(repoPath = "."){
+const program = new Command();
+
+class Grut {
+
+    constructor(repoPath = ".") {
         this.repoPath = path.join(repoPath, '.grut');
         this.objectsPath = path.join(this.repoPath, 'objects');
         this.headPath = path.join(this.repoPath, 'HEAD');
         this.indexPath = path.join(this.repoPath, 'index');
-        this.init();
     }
 
-    async init(){
+    async init() {
         await fs.mkdir(this.objectsPath, { recursive: true });
-        try{
+
+        try {
             await fs.writeFile(this.headPath, '', { flag: 'wx' });
             await fs.writeFile(this.indexPath, JSON.stringify([]), { flag: 'wx' });
-        } catch (e) {
+            console.log('Initialized empty Grut repository');
+        } catch {
             console.log('Repository already initialized.');
         }
     }
 
-    hashObject(data){
+    async ensureRepo() {
+        try {
+            await fs.access(this.repoPath);
+        } catch {
+            throw new Error("Not a grut repository. Run `grut init` first.");
+        }
+    }
+
+    hashObject(data) {
         return crypto.createHash('sha1').update(data, 'utf-8').digest('hex');
     }
 
-    async add(fileToAdd){
+    async add(fileToAdd) {
+        await this.ensureRepo();
+
         const fileData = await fs.readFile(fileToAdd, 'utf-8');
         const fileHash = this.hashObject(fileData);
 
-        const newFileHashedObjectPath = path.join(this.objectsPath, fileHash);
+        const objectPath = path.join(this.objectsPath, fileHash);
+
+        // write object only if not exists
+        try {
+            await fs.writeFile(objectPath, fileData, { flag: 'wx' });
+        } catch { }
+
         await this.updateStagingArea(fileToAdd, fileHash);
-        await fs.writeFile(newFileHashedObjectPath, fileData);
-
+        console.log(`Added ${fileToAdd}`);
     }
 
-    async updateStagingArea(filePath, fileHash){
-        const index = JSON.parse(await fs.readFile(this.indexPath, { encoding: 'utf-8'}));
+    async updateStagingArea(filePath, fileHash) {
+        const index = JSON.parse(await fs.readFile(this.indexPath, 'utf-8'));
 
-        index.push({ path: filePath, hash: fileHash });
-        await fs.writeFile(this.indexPath, JSON.stringify(index));
+        // remove duplicate entry
+        const filtered = index.filter(f => f.path !== filePath);
+        filtered.push({ path: filePath, hash: fileHash });
+
+        await fs.writeFile(this.indexPath, JSON.stringify(filtered, null, 2));
     }
 
-    async commit(message){
-        const index = JSON.parse(await fs.readFile(this.indexPath, { encoding: 'utf-8'}));
-        const parentCommit = await this.getCurrentHead();
+    async commit(message) {
+        await this.ensureRepo();
+
+        const index = JSON.parse(await fs.readFile(this.indexPath, 'utf-8'));
+        if (index.length === 0) {
+            console.log("Nothing to commit");
+            return;
+        }
+
+        const parent = await this.getCurrentHead();
 
         const commitData = {
-            timeStamp: new Date().toISOString(),
-            message: message,
-            parent: parentCommit,
+            timestamp: new Date().toISOString(),
+            message,
+            parent,
             files: index
         };
 
         const commitHash = this.hashObject(JSON.stringify(commitData));
-        const commitPath = path.join(this.objectsPath, commitHash);
-        await fs.writeFile(commitPath, JSON.stringify(commitData));
+        await fs.writeFile(
+            path.join(this.objectsPath, commitHash),
+            JSON.stringify(commitData, null, 2)
+        );
+
         await fs.writeFile(this.headPath, commitHash);
         await fs.writeFile(this.indexPath, JSON.stringify([]));
-        console.log(`Committed as ${commitHash}`);
 
+        console.log(`Committed as ${commitHash}`);
     }
 
-    async getCurrentHead(){
-        try{
-            return await fs.readFile(this.headPath, { encoding: 'utf-8' });
-        } catch (e) {
+    async getCurrentHead() {
+        try {
+            const head = await fs.readFile(this.headPath, 'utf-8');
+            return head.trim() || null;
+        } catch {
             return null;
         }
     }
 
-    async log(){
-        let currentCommitHash = await this.getCurrentHead();
-        while(currentCommitHash){
-            const commitPath = path.join(this.objectsPath, currentCommitHash);
-            const commitData = JSON.parse(await fs.readFile(commitPath, { encoding: 'utf-8' }));
-            console.log(`Commit: ${currentCommitHash}`);
-            console.log(`Date: ${commitData.timeStamp}`);
-            console.log(`Message: ${commitData.message}`);
-            console.log('-------------------------');
-            currentCommitHash = commitData.parent;
-        }
+    /* ---------------- LOG ---------------- */
 
+    async log() {
+        await this.ensureRepo();
+
+        let hash = await this.getCurrentHead();
+
+        while (hash) {
+            const commit = JSON.parse(
+                await fs.readFile(path.join(this.objectsPath, hash), 'utf-8')
+            );
+
+            console.log(chalk.yellow(`commit ${hash}`));
+            console.log(`Date: ${commit.timestamp}`);
+            console.log(`Message: ${commit.message}`);
+            console.log('------------------------');
+
+            hash = commit.parent;
+        }
     }
 
-    async showCommitDiff(commitHash){
-        const commitData = JSON.parse(await this.getCommitData(commitHash));
+    /* ---------------- DIFF ---------------- */
+
+    async showCommitDiff(commitHash) {
+        await this.ensureRepo();
+
+        const commitData = await this.getCommitData(commitHash);
         if (!commitData) return;
 
-        console.log("Changes in the last commit are: ");
+        console.log("Changes:\n");
 
         for (const file of commitData.files) {
-            console.log(`- ${file.path} (hash: ${file.hash})`);
-            const fileContent = await this.getFileContent(file.hash);
-            console.log(fileContent);
+            const newContent = await this.getFileContent(file.hash);
 
-            if (commitData.parent) {
-                const parentCommitData = JSON.parse(await this.getCommitData(commitData.parent));
-                const parentFileContent = await this.parentFileContent(parentCommitData, file.path);
-
-                if(parentFileContent != undefined ){
-                    console.log("\nDiff:");
-                    const diff = diffLines(parentFileContent, fileContent);
-                    diff.forEach(part => {
-
-                        if(part.added){
-                            process.stdout.write(chalk.green( "++" + part.value));
-                        }else if(part.removed){
-                            process.stdout.write(chalk.red("--" + part.value));
-                        }else{
-                            process.stdout.write(chalk.gray(part.value));
-                        }
-                    });
-                    console.log('\n-------------------------\n');
-                } else {
-                    console.log("\nNew file in this commit:");
-                    console.log(chalk.green(fileContent));
-                    console.log('\n-------------------------\n');
-                }
-            }else{
-                console.log("First commit, no parent to compare.");
+            if (!commitData.parent) {
+                console.log(chalk.green(`New file: ${file.path}`));
+                console.log(newContent);
+                continue;
             }
+
+            const parentCommit = await this.getCommitData(commitData.parent);
+            const oldContent = await this.getParentFileContent(parentCommit, file.path);
+
+            if (oldContent === undefined) {
+                console.log(chalk.green(`New file: ${file.path}`));
+                console.log(newContent);
+                continue;
+            }
+
+            console.log(chalk.cyan(`Diff for ${file.path}:`));
+            const diff = diffLines(oldContent, newContent);
+
+            diff.forEach(part => {
+                if (part.added) process.stdout.write(chalk.green("+" + part.value));
+                else if (part.removed) process.stdout.write(chalk.red("-" + part.value));
+                else process.stdout.write(part.value);
+            });
+
+            console.log('\n------------------------\n');
         }
     }
 
-    async getParentFileContent(parentCommitData, filePath){
-        const parentFile = parentCommitData.files.find(file => file.path === filePath);
-        if (parentFile) {
-            // read parent file content
-            return await this.getFileContent(parentFile.hash);
-        }
+    async getParentFileContent(parentCommit, filePath) {
+        const file = parentCommit.files.find(f => f.path === filePath);
+        return file ? this.getFileContent(file.hash) : undefined;
     }
 
-    async getFileContent(fileHash){
-        const filePath = path.join(this.objectsPath, fileHash);
+    async getFileContent(fileHash) {
+        return fs.readFile(path.join(this.objectsPath, fileHash), 'utf-8');
+    }
+
+    async getCommitData(commitHash) {
         try {
-            return await fs.readFile(filePath, { encoding: 'utf-8' });
-        } catch (error) {
-            console.error('File not found');
-            return null;
-        }
-    }
-
-    async getCommitData(commitHash){
-        const commitPath = path.join(this.objectsPath, commitHash);
-        try {
-            return await fs.readFile(commitPath, { encoding: 'utf-8' });
-        } catch (error) {
-            console.error('Commit not found');
+            return JSON.parse(
+                await fs.readFile(path.join(this.objectsPath, commitHash), 'utf-8')
+            );
+        } catch {
+            console.error("Commit not found");
             return null;
         }
     }
 }
 
-(async () => {
+/* ---------------- CLI ---------------- */
+
+program.command('init').action(async () => {
     const grut = new Grut();
-    await grut.add('test.txt');
-    await grut.commit('Initial commit');
-})();
+    await grut.init();
+});
+
+program.command('add <file>').action(async (file) => {
+    const grut = new Grut();
+    await grut.add(file);
+});
+
+program.command('commit <message>').action(async (message) => {
+    const grut = new Grut();
+    await grut.commit(message);
+});
+
+program.command('log').action(async () => {
+    const grut = new Grut();
+    await grut.log();
+});
+
+program.command('show <commitHash>').action(async (hash) => {
+    const grut = new Grut();
+    await grut.showCommitDiff(hash);
+});
+
+program.command('--help').action(() => {
+    console.log(`
+Usage: grut <command> [options]
+Commands:
+  init                 Initialize a new Grut repository
+  add <file>          Add a file to the staging area
+    commit <message>   Commit staged changes with a message
+    log                  Show commit history
+    show <commitHash>   Show diff of a specific commit
+    `);
+});
+
+program.parse(process.argv);
