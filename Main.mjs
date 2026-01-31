@@ -1,8 +1,11 @@
+#! /usr/bin/env node            // Shabang to run the script with Node.js
+
 import path from 'path';
 import fs from 'fs/promises';
 import crypto from 'crypto';
 import { diffLines } from 'diff';
 import chalk from 'chalk';
+// import { Command } from 'commander';
 
 class Grut{
  
