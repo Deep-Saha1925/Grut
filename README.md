@@ -1,4 +1,4 @@
-# Grut — A Minimal Git-like VCS ⚙️
+# Grut — A My own VCS ⚙️
 
 [![Author: Deep Saha](https://img.shields.io/badge/author-Deep%20Saha-blue)]
 
