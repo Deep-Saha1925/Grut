@@ -1,7 +1,8 @@
 import path from 'path';
 import fs from 'fs/promises';
 import crypto from 'crypto';
-import { timeStamp } from 'console';
+import { diffLines } from 'diff';
+import chalk from 'chalk';
 
 class Grut{
  
@@ -101,7 +102,27 @@ class Grut{
                 const parentCommitData = JSON.parse(await this.getCommitData(commitData.parent));
                 const parentFileContent = await this.parentFileContent(parentCommitData, file.path);
 
-                
+                if(parentFileContent != undefined ){
+                    console.log("\nDiff:");
+                    const diff = diffLines(parentFileContent, fileContent);
+                    diff.forEach(part => {
+
+                        if(part.added){
+                            process.stdout.write(chalk.green( "++" + part.value));
+                        }else if(part.removed){
+                            process.stdout.write(chalk.red("--" + part.value));
+                        }else{
+                            process.stdout.write(chalk.gray(part.value));
+                        }
+                    });
+                    console.log('\n-------------------------\n');
+                } else {
+                    console.log("\nNew file in this commit:");
+                    console.log(chalk.green(fileContent));
+                    console.log('\n-------------------------\n');
+                }
+            }else{
+                console.log("First commit, no parent to compare.");
             }
         }
     }
