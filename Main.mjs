@@ -86,6 +86,53 @@ class Grut{
 
     }
 
+    async showCommitDiff(commitHash){
+        const commitData = JSON.parse(await this.getCommitData(commitHash));
+        if (!commitData) return;
+
+        console.log("Changes in the last commit are: ");
+
+        for (const file of commitData.files) {
+            console.log(`- ${file.path} (hash: ${file.hash})`);
+            const fileContent = await this.getFileContent(file.hash);
+            console.log(fileContent);
+
+            if (commitData.parent) {
+                const parentCommitData = JSON.parse(await this.getCommitData(commitData.parent));
+                const parentFileContent = await this.parentFileContent(parentCommitData, file.path);
+
+                
+            }
+        }
+    }
+
+    async getParentFileContent(parentCommitData, filePath){
+        const parentFile = parentCommitData.files.find(file => file.path === filePath);
+        if (parentFile) {
+            // read parent file content
+            return await this.getFileContent(parentFile.hash);
+        }
+    }
+
+    async getFileContent(fileHash){
+        const filePath = path.join(this.objectsPath, fileHash);
+        try {
+            return await fs.readFile(filePath, { encoding: 'utf-8' });
+        } catch (error) {
+            console.error('File not found');
+            return null;
+        }
+    }
+
+    async getCommitData(commitHash){
+        const commitPath = path.join(this.objectsPath, commitHash);
+        try {
+            return await fs.readFile(commitPath, { encoding: 'utf-8' });
+        } catch (error) {
+            console.error('Commit not found');
+            return null;
+        }
+    }
 }
 
 (async () => {
